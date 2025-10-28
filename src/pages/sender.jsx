@@ -10,7 +10,11 @@ function SenderComponent() {
   const [file, setFile] = useState(null);
 
   useEffect(() => {
-    setPc(new RTCPeerConnection())
+    setPc(new RTCPeerConnection({
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" }, // Google public STUN server
+  ],
+}))
   },[])
 
    const createConnection = async () => {

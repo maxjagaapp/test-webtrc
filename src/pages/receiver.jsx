@@ -8,8 +8,11 @@ export default function Receiver() {
   const [answer, setAnswer] = useState("");
   const [receivedBuffers, setReceivedBuffers] = useState([]);
 
-  useEffect(()=>{
-    setPc( new RTCPeerConnection())
+  useEffect(()=>{ setPc(new RTCPeerConnection({
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" }, // Google public STUN server
+  ],
+}))
   },[])
 
   const createAnswer = async () => {
