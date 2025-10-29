@@ -8,8 +8,7 @@ export function getSignalingUrl() {
     return override;
   }
   // 2) Env (Vite/CRA) or fallback to localhost for development
-  let url = "ws://localhost:3001"; //process.env.REACT_APP_SIGNALING_URL ||
-  //"wss://signalingroom.onrender.com";
+  let url = "wss://test-webtrc.onrender.com/";
 
   // 3) If env was just a host, add scheme matching page protocol
   if (!/^wss?:\/\//i.test(url)) {
