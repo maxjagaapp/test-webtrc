@@ -8,9 +8,17 @@ function SenderComponent() {
 
   const [dataChannel, setDataChannel] = useState(null);
   const [dcOpen, setDcOpen] = useState(false);
+  console.log("🚀 ~ SenderComponent ~ dcOpen:", dcOpen)
   const [file, setFile] = useState(null);
+  console.log("🚀 ~ SenderComponent ~ file:", file)
   const [roomId, setRoomId] = useState("test-room");
   const [joined, setJoined] = useState(false);
+  const roomIdRef = useRef("test-room"); // Add ref to track current roomId
+
+  // Update roomIdRef when roomId changes
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
 
   // Presence UI
   const [peers, setPeers] = useState(0);
@@ -22,12 +30,34 @@ function SenderComponent() {
     return typeof roleObj === 'object' ? roleObj.role === "receiver" : roleObj === "receiver";
   });
   console.log("Roles array:", roles, "Has receiver:", hasReceiver);
+  console.log("Joined:", joined, "Peers:", peers, "Button should be enabled:", joined && hasReceiver);
+
+  // Connection state
+  const [connectionState, setConnectionState] = useState("disconnected");
 
   useEffect(() => {
     const pc = new RTCPeerConnection({
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
     });
     pcRef.current = pc;
+
+    // Add more detailed connection monitoring
+    pc.onconnectionstatechange = () => {
+      console.log("🔗 Connection state changed to:", pc.connectionState);
+      setConnectionState(pc.connectionState);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("🧊 ICE connection state:", pc.iceConnectionState);
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log("📊 ICE gathering state:", pc.iceGatheringState);
+    };
+
+    pc.onsignalingstatechange = () => {
+      console.log("📡 Signaling state:", pc.signalingState);
+    };
 
     // Signaling socket
     const signalingUrl = getSignalingUrl();
@@ -72,23 +102,26 @@ function SenderComponent() {
       }
 
       if (msg.type === "answer" && msg.sdp) {
-        console.log("Current signaling state:", pc.signalingState);
+        console.log("📥 Received answer, current signaling state:", pc.signalingState);
         if (pc.signalingState === "have-local-offer") {
           try {
             await pc.setRemoteDescription(msg.sdp);
-            console.log("Answer set successfully.");
+            console.log("✅ Answer set successfully, new signaling state:", pc.signalingState);
           } catch (error) {
-            console.error("Failed to set remote description:", error);
+            console.error("❌ Failed to set remote description:", error);
           }
         } else {
-          console.warn("Received answer but not in correct state. Current state:", pc.signalingState);
+          console.warn("⚠️ Received answer but not in correct state. Current state:", pc.signalingState);
         }
       } else if (msg.type === "candidate" && msg.candidate) {
+        console.log("📥 Received ICE candidate:", msg.candidate);
         try { 
           await pc.addIceCandidate(msg.candidate);
-          console.log("ICE candidate added successfully");
+          console.log("✅ ICE candidate added successfully");
         }
-        catch (e) { console.error("Failed to add ICE candidate", e); }
+        catch (e) { 
+          console.error("❌ Failed to add ICE candidate", e); 
+        }
       }
     };
 
@@ -105,7 +138,7 @@ function SenderComponent() {
       setTimeout(joinRoom, 300);
       return;
     }
-    const joinMessage = { type: "join", room: roomId, role: "sender" };
+    const joinMessage = { type: "join", room: roomIdRef.current, role: "sender" };
     console.log("Sending join message:", joinMessage);
     wsRef.current.send(JSON.stringify(joinMessage));
     setJoined(true);
@@ -116,27 +149,72 @@ function SenderComponent() {
     const ws = wsRef.current;
     if (!pc || !ws || !joined) return alert("Join a room first.");
 
+    console.log("🚀 Creating data channel and offer...");
+    
     const dc = pc.createDataChannel("fileTransfer");
     dc.binaryType = "arraybuffer";
-    dc.onopen = () => setDcOpen(true);
-    dc.onclose = () => setDcOpen(false);
+    dc.onopen = () => {
+      console.log("🎉 Data channel opened!");
+      setDcOpen(true);
+      setConnectionState("connected");
+    };
+    dc.onclose = () => {
+      console.log("❌ Data channel closed!");
+      setDcOpen(false);
+      setConnectionState("disconnected");
+    };
+    dc.onerror = (error) => {
+      console.error("❌ Data channel error:", error);
+    };
     setDataChannel(dc);
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        ws.send(JSON.stringify({ type: "candidate", candidate: e.candidate, room: roomId }));
+        console.log("📤 Sending ICE candidate:", e.candidate);
+        ws.send(JSON.stringify({ type: "candidate", candidate: e.candidate, room: roomIdRef.current }));
+      } else {
+        console.log("🏁 ICE gathering complete");
       }
     };
 
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription, room: roomId }));
+    try {
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      console.log("📤 Sending offer, signaling state:", pc.signalingState);
+      ws.send(JSON.stringify({ type: "offer", sdp: pc.localDescription, room: roomIdRef.current }));
+      
+      setConnectionState("connecting");
+      console.log("⏳ Offer sent, waiting for receiver to accept...");
+      
+      // Add timeout to detect connection issues
+      setTimeout(() => {
+        if (pc.connectionState === "connecting") {
+          console.warn("⚠️ Still connecting after 10 seconds");
+          console.log("ICE connection state:", pc.iceConnectionState);
+          console.log("ICE gathering state:", pc.iceGatheringState);
+          console.log("Signaling state:", pc.signalingState);
+        }
+      }, 10000);
+      
+    } catch (error) {
+      console.error("❌ Failed to create or send offer:", error);
+      setConnectionState("failed");
+    }
   };
 
   const sendFile = async () => {
     const dc = dataChannel;
     if (!dc || !file) return alert("No file or connection yet!");
     if (dc.readyState !== "open") return alert("Data channel not open yet.");
+
+    // Send file metadata first
+    const metadata = {
+      name: file.name,
+      type: file.type,
+      size: file.size
+    };
+    dc.send("METADATA:" + JSON.stringify(metadata));
+    console.log("Sent file metadata:", metadata);
 
     const chunkSize = 16 * 1024;
     const reader = new FileReader();
@@ -192,6 +270,12 @@ function SenderComponent() {
         </p>
       )}
       {myPeerId && <p>My Peer ID: <b>{myPeerId}</b> — My Role: <b>{myRole}</b></p>}
+      
+      {/* Connection Status */}
+      <p>Connection: <b style={{color: dcOpen ? 'green' : connectionState === 'connecting' ? 'orange' : 'red'}}>
+        {dcOpen ? 'Data Channel Open' : connectionState === 'connecting' ? 'Connecting...' : 'Disconnected'}
+      </b></p>
+      
       <div>
         <h4>Peers in room:</h4>
         {roles.length > 0 ? (
@@ -209,10 +293,15 @@ function SenderComponent() {
           <p>No peers in room yet</p>
         )}
       </div>
-      <button onClick={createConnection} disabled={!joined}>1️⃣ Create Offer</button>
+      
+      <button onClick={createConnection} disabled={!joined || !hasReceiver}>
+        1️⃣ Create Offer {hasReceiver ? '' : '(Need receiver first)'}
+      </button>
       <br />
       <input type="file" onChange={(e) => setFile(e.target.files[0])} />
-      <button onClick={sendFile} disabled={!file || !dcOpen}>3️⃣ Send File</button>
+      <button onClick={sendFile} disabled={!file || !dcOpen}>
+        3️⃣ Send File {dcOpen ? '' : '(Data channel not ready)'}
+      </button>
     </div>
   );
 }

@@ -12,6 +12,12 @@ export default function Receiver() {
   const [roles, setRoles] = useState([]);
   const [myPeerId, setMyPeerId] = useState(null);
   const [myRole, setMyRole] = useState("receiver");
+  const roomIdRef = useRef("test-room"); // Add ref to track current roomId
+
+  // Update roomIdRef when roomId changes
+  useEffect(() => {
+    roomIdRef.current = roomId;
+  }, [roomId]);
 
   useEffect(() => {
     const pc = new RTCPeerConnection({
@@ -19,19 +25,73 @@ export default function Receiver() {
     });
     pcRef.current = pc;
 
+    // Add connection state monitoring to receiver too
+    pc.onconnectionstatechange = () => {
+      console.log("🔗 Receiver connection state changed to:", pc.connectionState);
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log("🧊 Receiver ICE connection state:", pc.iceConnectionState);
+    };
+
+    pc.onicegatheringstatechange = () => {
+      console.log("📊 Receiver ICE gathering state:", pc.iceGatheringState);
+    };
+
+    pc.onsignalingstatechange = () => {
+      console.log("📡 Receiver signaling state:", pc.signalingState);
+    };
+
     pc.ondatachannel = (event) => {
+      console.log("🎉 Receiver: Data channel received!");
       const channel = event.channel;
       channel.binaryType = "arraybuffer";
       const buffers = [];
+      let fileMetadata = null;
+      
+      channel.onopen = () => {
+        console.log("🎉 Receiver: Data channel opened!");
+      };
+      
+      channel.onclose = () => {
+        console.log("❌ Receiver: Data channel closed!");
+      };
+      
+      channel.onerror = (error) => {
+        console.error("❌ Receiver: Data channel error:", error);
+      };
+      
       channel.onmessage = (e) => {
-        if (typeof e.data === "string" && e.data === "EOF") {
-          const blob = new Blob(buffers, { type: "application/octet-stream" });
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
-          a.download = "received_file";
-          a.click();
-          URL.revokeObjectURL(url);
+        if (typeof e.data === "string") {
+          if (e.data.startsWith("METADATA:")) {
+            // Parse file metadata (name, type, size)
+            try {
+              fileMetadata = JSON.parse(e.data.substring(9));
+              console.log("Received file metadata:", fileMetadata);
+            } catch (err) {
+              console.error("Failed to parse metadata:", err);
+            }
+          } else if (e.data === "EOF") {
+            // Create blob with proper type
+            const mimeType = fileMetadata?.type || "application/octet-stream";
+            const fileName = fileMetadata?.name || "received_file";
+            
+            const blob = new Blob(buffers, { type: mimeType });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a); // Add to DOM for Firefox compatibility
+            a.click();
+            document.body.removeChild(a); // Clean up
+            URL.revokeObjectURL(url);
+            
+            console.log(`File received: ${fileName} (${blob.size} bytes, ${mimeType})`);
+            
+            // Reset for next file
+            buffers.length = 0;
+            fileMetadata = null;
+          }
         } else {
           buffers.push(e.data);
         }
@@ -79,20 +139,47 @@ export default function Receiver() {
       }
 
       if (msg.type === "offer" && msg.sdp) {
-        await pc.setRemoteDescription(msg.sdp);
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        ws.send(JSON.stringify({ type: "answer", sdp: pc.localDescription, room: roomId }));
+        console.log("📥 Receiver: Received offer, current signaling state:", pc.signalingState);
+        try {
+          await pc.setRemoteDescription(msg.sdp);
+          console.log("✅ Receiver: Offer set successfully, new signaling state:", pc.signalingState);
+          
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          console.log("📤 Receiver: Sending answer, signaling state:", pc.signalingState);
+          
+          ws.send(JSON.stringify({ type: "answer", sdp: pc.localDescription, room: roomIdRef.current }));
+        } catch (error) {
+          console.error("❌ Receiver: Failed to handle offer:", error);
+        }
       } else if (msg.type === "candidate" && msg.candidate) {
-        try { await pc.addIceCandidate(msg.candidate); }
-        catch (e) { console.error("Failed to add ICE candidate", e); }
+        console.log("📥 Receiver: Received ICE candidate:", msg.candidate);
+        try { 
+          await pc.addIceCandidate(msg.candidate);
+          console.log("✅ Receiver: ICE candidate added successfully");
+        }
+        catch (e) { 
+          console.error("❌ Receiver: Failed to add ICE candidate", e); 
+        }
       }
     };
 
     // Send ICE whenever we have it (server forwards after join)
     pc.onicecandidate = (e) => {
       if (e.candidate && wsRef.current) {
-        wsRef.current.send(JSON.stringify({ type: "candidate", candidate: e.candidate, room: roomId }));
+        // Check WebSocket state instead of joined flag
+        if (wsRef.current.readyState === WebSocket.OPEN) {
+          console.log("📤 Receiver: Sending ICE candidate:", e.candidate);
+          wsRef.current.send(JSON.stringify({ 
+            type: "candidate", 
+            candidate: e.candidate, 
+            room: roomIdRef.current // Use ref instead of state
+          }));
+        } else {
+          console.warn("⚠️ Receiver: WebSocket not ready, ICE candidate not sent");
+        }
+      } else if (!e.candidate) {
+        console.log("🏁 Receiver: ICE gathering complete");
       }
     };
 
@@ -109,7 +196,7 @@ export default function Receiver() {
       setTimeout(joinRoom, 300);
       return;
     }
-    const joinMessage = { type: "join", room: roomId, role: "receiver" };
+    const joinMessage = { type: "join", room: roomIdRef.current, role: "receiver" };
     console.log("Receiver sending join message:", joinMessage);
     wsRef.current.send(JSON.stringify(joinMessage));
     setJoined(true);
