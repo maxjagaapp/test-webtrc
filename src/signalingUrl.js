@@ -8,7 +8,7 @@ export function getSignalingUrl() {
     return override;
   }
   // 2) Env (Vite/CRA) or fallback to localhost for development
-  let url = "ws://signalingroom.onrender.com";
+  let url = "wss://signalingroom.onrender.com";
 
   // 3) If env was just a host, add scheme matching page protocol
   if (!/^wss?:\/\//i.test(url)) {
