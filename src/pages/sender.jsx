@@ -15,7 +15,13 @@ function SenderComponent() {
   // Presence UI
   const [peers, setPeers] = useState(0);
   const [roles, setRoles] = useState([]);
-  const hasReceiver = roles.includes("receiver");
+  const [myPeerId, setMyPeerId] = useState(null);
+  const [myRole, setMyRole] = useState("sender");
+  const hasReceiver = roles.some(roleObj => {
+    console.log("Checking role object:", roleObj);
+    return typeof roleObj === 'object' ? roleObj.role === "receiver" : roleObj === "receiver";
+  });
+  console.log("Roles array:", roles, "Has receiver:", hasReceiver);
 
   useEffect(() => {
     const pc = new RTCPeerConnection({
@@ -50,16 +56,38 @@ function SenderComponent() {
       // Presence updates
       if (msg.type === "joined" || msg.type === "peer-joined" || msg.type === "peer-left") {
         console.log("Presence update:", msg);
+        console.log("Roles received:", msg.roles);
         if (msg.count != null) setPeers(msg.count);
-        if (Array.isArray(msg.roles)) setRoles(msg.roles);
+        if (Array.isArray(msg.roles)) {
+          console.log("Setting roles to:", msg.roles);
+          setRoles(msg.roles);
+        }
+        
+        // Store our own peer ID when we join
+        if (msg.type === "joined" && msg.peerId) {
+          setMyPeerId(msg.peerId);
+          console.log("Received my peer ID:", msg.peerId);
+        }
         return;
       }
 
       if (msg.type === "answer" && msg.sdp) {
-        await pc.setRemoteDescription(msg.sdp);
-        console.log("Answer set.");
+        console.log("Current signaling state:", pc.signalingState);
+        if (pc.signalingState === "have-local-offer") {
+          try {
+            await pc.setRemoteDescription(msg.sdp);
+            console.log("Answer set successfully.");
+          } catch (error) {
+            console.error("Failed to set remote description:", error);
+          }
+        } else {
+          console.warn("Received answer but not in correct state. Current state:", pc.signalingState);
+        }
       } else if (msg.type === "candidate" && msg.candidate) {
-        try { await pc.addIceCandidate(msg.candidate); }
+        try { 
+          await pc.addIceCandidate(msg.candidate);
+          console.log("ICE candidate added successfully");
+        }
         catch (e) { console.error("Failed to add ICE candidate", e); }
       }
     };
@@ -73,7 +101,7 @@ function SenderComponent() {
   const joinRoom = () => {
     console.log("Attempting to join room:", roomId);
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.log("WebSocket not ready, retrying...");
+      console.log("WebSocket not ready, state:", wsRef.current?.readyState, "retrying...");
       setTimeout(joinRoom, 300);
       return;
     }
@@ -157,7 +185,30 @@ function SenderComponent() {
         <input value={roomId} onChange={(e) => setRoomId(e.target.value)} placeholder="room id" />
         <button onClick={joinRoom} disabled={joined}>Join room</button>
       </div>
-      <p>Room: <b>{roomId}</b> — Peers: {peers} — Receiver present: {hasReceiver ? "Yes" : "No"}</p>
+      <p>Room: <b>{roomId}</b> — Peers: {peers}</p>
+      {joined && (
+        <p style={{color: peers >= 2 ? 'green' : 'orange'}}>
+          Status: {peers >= 2 ? 'Ready to connect!' : `Waiting for receiver (${peers}/2 peers)`}
+        </p>
+      )}
+      {myPeerId && <p>My Peer ID: <b>{myPeerId}</b> — My Role: <b>{myRole}</b></p>}
+      <div>
+        <h4>Peers in room:</h4>
+        {roles.length > 0 ? (
+          <ul>
+            {roles.map((roleObj, index) => (
+              <li key={index}>
+                {typeof roleObj === 'object' 
+                  ? `${roleObj.peerId}: ${roleObj.role}` 
+                  : `Peer ${index + 1}: ${roleObj}`
+                }
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No peers in room yet</p>
+        )}
+      </div>
       <button onClick={createConnection} disabled={!joined}>1️⃣ Create Offer</button>
       <br />
       <input type="file" onChange={(e) => setFile(e.target.files[0])} />

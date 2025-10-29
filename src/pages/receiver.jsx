@@ -10,6 +10,8 @@ export default function Receiver() {
   const [joined, setJoined] = useState(false);
   const [peers, setPeers] = useState(0);
   const [roles, setRoles] = useState([]);
+  const [myPeerId, setMyPeerId] = useState(null);
+  const [myRole, setMyRole] = useState("receiver");
 
   useEffect(() => {
     const pc = new RTCPeerConnection({
@@ -61,8 +63,18 @@ export default function Receiver() {
       // Presence updates
       if (msg.type === "joined" || msg.type === "peer-joined" || msg.type === "peer-left") {
         console.log("Receiver presence update:", msg);
+        console.log("Receiver roles received:", msg.roles);
         if (msg.count != null) setPeers(msg.count);
-        if (Array.isArray(msg.roles)) setRoles(msg.roles);
+        if (Array.isArray(msg.roles)) {
+          console.log("Receiver setting roles to:", msg.roles);
+          setRoles(msg.roles);
+        }
+        
+        // Store our own peer ID when we join
+        if (msg.type === "joined" && msg.peerId) {
+          setMyPeerId(msg.peerId);
+          console.log("Receiver received my peer ID:", msg.peerId);
+        }
         return;
       }
 
@@ -93,7 +105,7 @@ export default function Receiver() {
   const joinRoom = () => {
     console.log("Receiver attempting to join room:", roomId);
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      console.log("Receiver WebSocket not ready, retrying...");
+      console.log("Receiver WebSocket not ready, state:", wsRef.current?.readyState, "retrying...");
       setTimeout(joinRoom, 300);
       return;
     }
@@ -103,7 +115,11 @@ export default function Receiver() {
     setJoined(true);
   };
 
-  const hasSender = roles.includes("sender");
+  const hasSender = roles.some(roleObj => {
+    console.log("Receiver checking role object:", roleObj);
+    return typeof roleObj === 'object' ? roleObj.role === "sender" : roleObj === "sender";
+  });
+  console.log("Receiver roles array:", roles, "Has sender:", hasSender);
 
   return (
     <div style={{ padding: 20 }}>
@@ -112,7 +128,30 @@ export default function Receiver() {
         <input value={roomId} onChange={(e) => setRoomId(e.target.value)} placeholder="room id" />
         <button onClick={joinRoom} disabled={joined}>Join room</button>
       </div>
-      <p>Room: <b>{roomId}</b> — Peers: {peers} — Sender present: {hasSender ? "Yes" : "No"}</p>
+      <p>Room: <b>{roomId}</b> — Peers: {peers}</p>
+      {joined && (
+        <p style={{color: peers >= 2 ? 'green' : 'orange'}}>
+          Status: {peers >= 2 ? 'Ready to receive!' : `Waiting for sender (${peers}/2 peers)`}
+        </p>
+      )}
+      {myPeerId && <p>My Peer ID: <b>{myPeerId}</b> — My Role: <b>{myRole}</b></p>}
+      <div>
+        <h4>Peers in room:</h4>
+        {roles.length > 0 ? (
+          <ul>
+            {roles.map((roleObj, index) => (
+              <li key={index}>
+                {typeof roleObj === 'object' 
+                  ? `${roleObj.peerId}: ${roleObj.role}` 
+                  : `Peer ${index + 1}: ${roleObj}`
+                }
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p>No peers in room yet</p>
+        )}
+      </div>
       <p>Waiting for offer...</p>
     </div>
   );
